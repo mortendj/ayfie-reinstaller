@@ -6,7 +6,6 @@ version=
 port_offset=
 old_dot_env_file_path=
 install_dir=
-ram=
 block_execution=false
 base_port=20000
 base_url="http://docs.ayfie.com/ayfie-platform/release/"
@@ -30,7 +29,6 @@ show_usage_and_exit() {
   echo "  -e <.env file path>   The .env source location. Default: file auto generated"
   echo "  -h                    This help"
   echo "  -i <install dir>      Default: ./<version number>"  
-  echo "  -m <GB of RAM>     Default: 64"  
   echo "  -o                    Do installation only, don't start up ayfie"    
   echo "  -p <port>             Default: $base_port + version number"
   echo "  -r                    Stop and remove ayfie (for default install dir only)"  
@@ -67,14 +65,7 @@ validate_and_process_input_parameters() {
       else
         port="To have been set in $ $old_dot_env_file_path"    
       fi
-      if [[ $ram ]]; then
-        show_usage_and_exit "Option -m and -e cannot be used together. Set memory limits in the .env file."
-      fi
     else 
-      if [[ $ram ]]; then
-      else
-        ram="64"
-      fi
       if [[ ! $port ]]; then
         port_offset="${ayfie_version//\./}" 
         port=$((base_port + port_offset))
@@ -180,8 +171,6 @@ while getopts "bd:e:hi:op:rsv:" option; do
       show_usage_and_exit ;;
     i)
       install_dir=$OPTARG ;;
-    m)
-      ram=$OPTARG ;;      
     o)
       block_execution=true ;;    
     p)
