@@ -6,6 +6,7 @@ version=
 port_offset=
 old_dot_env_file_path=
 install_dir=
+ram=
 block_execution=false
 base_port=20000
 base_url="http://docs.ayfie.com/ayfie-platform/release/"
@@ -19,7 +20,6 @@ show_usage_and_exit() {
   if [[ $error_msg ]]; then
     echo "ERROR: $error_msg"
     echo
-    x=1
   fi
   echo "Usage: $0 <options>"
   echo
@@ -29,6 +29,7 @@ show_usage_and_exit() {
   echo "  -e <.env file path>   The .env source location. Default: file auto generated"
   echo "  -h                    This help"
   echo "  -i <install dir>      Default: ./<version number>"  
+  echo "  -m <GB of RAM>        Default: 64"  
   echo "  -o                    Do installation only, don't start up ayfie"    
   echo "  -p <port>             Default: $base_port + version number"
   echo "  -r                    Stop and remove ayfie (for default install dir only)"  
@@ -65,7 +66,13 @@ validate_and_process_input_parameters() {
       else
         port="To have been set in $ $old_dot_env_file_path"    
       fi
+      if [[ $ram ]]; then
+        show_usage_and_exit "Option -m and -e cannot be used together. Set memory limits in the .env file."
+      fi
     else 
+      if [[ ! $ram ]]; then
+        ram="64"
+      fi
       if [[ ! $port ]]; then
         port_offset="${ayfie_version//\./}" 
         port=$((base_port + port_offset))
@@ -100,6 +107,7 @@ validate_and_process_input_parameters() {
       if [[ $old_dot_env_file_path ]]; then
         echo "  .env file:   $old_dot_env_file_path"
       else
+        echo "  Total RAM:   $ram" 
         echo "  .env file:   To be generated"    
       fi
       echo
@@ -115,13 +123,21 @@ gen_or_copy_dot_env_file() {
   if [[ $old_dot_env_file_path ]]; then
     cp $old_dot_env_file_path $new_dot_env_file_path
   else
-      local lines="AYFIE_PORT=$port"
-      lines="$lines\nEXTRACTION_MEM_LIMIT=8G"
-      lines="$lines\nAYFIE_MEM_LIMIT=96G"
-      lines="$lines\nELASTICSEARCH_MEM_LIMIT=32G"
-      lines="$lines\nDATA_VOLUME=$data_dir"
-      #touch $new_dot_env_file_path
-      printf $lines > $new_dot_env_file_path
+    local lines="AYFIE_PORT=$port"
+    local extract_mem
+    local ayfie_mem
+    local elastic_mem
+    let "extract_mem = $ram / 16"
+    if [[ $extract_mem < 1 ]]; then
+      extract_mem=1
+    fi
+    let "ayfie_mem = 3 * $ram / 4"
+    let "elastic_mem = $ram / 4"
+    lines="$lines\nEXTRACTION_MEM_LIMIT=${extract_mem}G"
+    lines="$lines\nAYFIE_MEM_LIMIT=${ayfie_mem}G"
+    lines="$lines\nELASTICSEARCH_MEM_LIMIT=${elastic_mem}G"
+    lines="$lines\nDATA_VOLUME=$data_dir"
+    printf $lines > $new_dot_env_file_path
   fi
 }
 
@@ -159,7 +175,7 @@ start_ayfie() {
   fi
 }
 
-while getopts "bd:e:hi:op:rsv:" option; do
+while getopts "bd:e:hi:m:op:rsv:" option; do
   case $option in
     b)
       bounce=true ;; 
@@ -171,6 +187,8 @@ while getopts "bd:e:hi:op:rsv:" option; do
       show_usage_and_exit ;;
     i)
       install_dir=$OPTARG ;;
+    m)
+      ram=$OPTARG ;;      
     o)
       block_execution=true ;;    
     p)
