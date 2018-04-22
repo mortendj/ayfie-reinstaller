@@ -17,4 +17,5 @@ Options:
   -r                    Stop and remove ayfie (for default install dir only)
   -s                    Stop ayfie (for default install directory only)
   -v <version>          Mandatory: 1.8.3, 1.9.0, 1.10.3, etc.
+  
 
