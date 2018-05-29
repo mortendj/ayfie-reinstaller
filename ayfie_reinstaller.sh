@@ -14,6 +14,7 @@ base_url="http://docs.ayfie.com/ayfie-platform/release/"
 stop=false
 remove=false
 bounce=false
+alerting=false
 
 show_usage_and_exit() {
   local error_msg=$1
@@ -25,6 +26,7 @@ show_usage_and_exit() {
   echo "Usage: $0 <options>"
   echo
   echo "Options:"
+  echo "  -a                    Install alerting and messaging"
   echo "  -b                    bounce (or start) ayfie (for default install dir only)"
   echo "  -c <file path>        Path to application-custom.yml. Default: No path"  
   echo "  -d <data dir>         Default: ./data (corresponds to <install dir>/data)"
@@ -70,7 +72,7 @@ validate_and_process_input_parameters() {
       if [[ $port ]]; then
         show_usage_and_exit "Option -p and -e cannot be used together. Set the port in the .env file."
       else
-        port="To have been set in $ $dot_env_file_from_path"    
+        port="To have been set in $dot_env_file_from_path"    
       fi
       if [[ $ram ]]; then
         show_usage_and_exit "Option -m and -e cannot be used together. Set memory limits in the .env file."
@@ -112,7 +114,7 @@ validate_and_process_input_parameters() {
       echo "  Install dir:          $install_dir_path"
       echo "  Data dir:             $data_dir"
       if [[ $dot_env_file_from_path ]]; then
-        echo "  .env file:              $dot_env_file_from_path"
+        echo "  .env file:            $dot_env_file_from_path"
       else
         echo "  Total RAM:            $ram" 
         echo "  .env file:            To be generated"    
@@ -121,7 +123,12 @@ validate_and_process_input_parameters() {
         echo "  docker-compose.yml:   To be updated"
       else
         echo "  docker-compose.yml:   Unchanged"      
-      fi      
+      fi
+      if [[ $alerting == true ]]; then
+        echo "  Alerting:             To be included"
+      else
+        echo "  Alerting:             Not to be included"      
+      fi            
       echo
       echo "Do you want to go ahead with the ayfie Inspector installation (y/n)?"
     fi
@@ -197,13 +204,23 @@ install_ayfie() {
 }
 
 start_ayfie() {
-  if [[ $block_execution == false ]]; then
-    eval ". $ayfie_start_up_script"
+  if [[ $block_execution == false ]]; then 
+    pushd $PWD
+    cd $install_dir_path
+    . incl.sh
+    if [[ $alerting == true ]]; then
+      docker-compose -f docker-compose.yml -f docker-compose-alerting.yml up -d
+    else
+      docker-compose -f docker-compose.yml up -d
+    fi
+    popd
   fi
 }
 
-while getopts "bc:d:e:hi:m:op:rsv:" option; do
+while getopts "abc:d:e:hi:m:op:rsv:" option; do
   case $option in
+    a)
+      alerting=true ;;
     b)
       bounce=true ;;
     c)
