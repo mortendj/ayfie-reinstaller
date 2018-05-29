@@ -29,7 +29,7 @@ show_usage_and_exit() {
   echo "  -a                    Install alerting and messaging"
   echo "  -b                    bounce (or start) ayfie (for default install dir only)"
   echo "  -c <file path>        Path to application-custom.yml. Default: No path"  
-  echo "  -d <data dir>         Default: ./data (corresponds to <install dir>/data)"
+  echo "  -d <data dir>         Default: <install dir>/data"
   echo "  -e <file path>        The .env file location. Default: file auto generated"
   echo "  -h                    This help"
   echo "  -i <install dir>      Default: ./<version number>"  
@@ -55,7 +55,7 @@ validate_and_process_input_parameters() {
         show_usage_and_exit "The install path must be an absolute path"
       fi
     else
-      install_dir_path="$(pwd)/$ayfie_version"  
+      install_dir_path="$PWD/$ayfie_version"  
     fi
     if [[ -d "$install_dir_path" ]]; then
       if [[ ! ( $stop == true || $remove == true || $bounce == true) ]]; then
@@ -95,7 +95,6 @@ validate_and_process_input_parameters() {
     download_url="$base_url$ayfie_installer_file_name"
     dot_env_file_to_path="$install_dir_path/.env"
     docker_compose_yml_file_path="$install_dir_path/docker-compose.yml"
-    ayfie_start_up_script="$install_dir_path/start-ayfie.sh"
     ayfie_stop_script="$install_dir_path/stop-ayfie.sh"
     
     echo
@@ -203,11 +202,29 @@ install_ayfie() {
   update_docker_compose_yml_file
 }
 
+checkDocker() {
+  dockerVersion=$(docker version --format '{{.Server.Version}}')
+  exitStatus=$?
+  if [ ${exitStatus} -ne 0 ]; then
+    echo "Docker must be installed and the current user must have permission to use it."
+    exit 1
+  fi
+  parsedVersion=( ${dockerVersion//./ })
+  if (( parsedVersion[0] < 17 )); then
+    echo "Need at least version 17 of docker"
+    exit 1
+  fi
+}
+
 start_ayfie() {
   if [[ $block_execution == false ]]; then 
     pushd $PWD
     cd $install_dir_path
-    . incl.sh
+    checkDocker
+    if [ ! -x docker-compose ]; then
+      curl -L https://github.com/docker/compose/releases/download/1.17.0/docker-compose-`uname -s`-`uname -m` -o docker-compose
+      chmod a+x docker-compose
+    fi
     if [[ $alerting == true ]]; then
       docker-compose -f docker-compose.yml -f docker-compose-alerting.yml up -d
     else
@@ -215,6 +232,13 @@ start_ayfie() {
     fi
     popd
   fi
+}
+
+stop_ayfie() {
+  pushd $PWD
+  cd $install_dir_path
+  docker-compose -f docker-compose.yml -f docker-compose-alerting.yml down
+  popd
 }
 
 while getopts "abc:d:e:hi:m:op:rsv:" option; do
@@ -252,22 +276,18 @@ done
 
 main() {
   validate_and_process_input_parameters
-  if [[ $remove == true ]]; then
-    eval ". $ayfie_stop_script"
-    rm -r $install_dir_path
-    exit 0
+  if [[ $remove == true || $stop == true || $bounce == true ]]; then
+    stop_ayfie
+    if [[ $remove == true ]]; then
+        rm -r $install_dir_path
+    fi
+    if [[ $bounce == true ]]; then
+      start_ayfie
+    fi
+  else
+    install_ayfie
+    start_ayfie
   fi
-  if [[ $stop == true ]]; then
-    eval ". $ayfie_stop_script"
-    exit 0
-  fi
-  if [[ $bounce == true ]]; then
-    eval ". $ayfie_stop_script"
-    eval ". $ayfie_start_up_script"
-    exit 0
-  fi
-  install_ayfie
-  start_ayfie
 }
 
 main
