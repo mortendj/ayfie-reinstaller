@@ -187,6 +187,10 @@ download_installer_zip_file() {
 }
 
 unzip_installer_zip_file() {
+  if ! type "unzip" > /dev/null; then
+    apt-get update
+    apt-get install unzip
+  fi
   eval "unzip $ayfie_installer_file_path -d $install_dir_path"
   status=$?
   if [[ $status -ne 0 ]]; then
@@ -206,8 +210,8 @@ checkDocker() {
   dockerVersion=$(docker version --format '{{.Server.Version}}')
   exitStatus=$?
   if [ ${exitStatus} -ne 0 ]; then
-    echo "Docker must be installed and the current user must have permission to use it."
-    exit 1
+    apt-get update
+    apt-get install docker.io
   fi
   parsedVersion=( ${dockerVersion//./ })
   if (( parsedVersion[0] < 17 )); then
