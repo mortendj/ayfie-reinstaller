@@ -8,6 +8,9 @@ dot_env_file_from_path=
 docker_compose_custom_yml_file_path=
 install_dir_path=
 ram=
+quay=
+quay_user=
+quay_password=
 block_execution=false
 base_port=20000
 base_url="http://docs.ayfie.com/ayfie-platform/release/"
@@ -34,18 +37,28 @@ show_usage_and_exit() {
   echo "  -h                    This help"
   echo "  -i <install dir>      Default: ./<version number>"  
   echo "  -m <GB of RAM>        Default: 64"  
-  echo "  -o                    Do installation only, don't start up ayfie"    
+  echo "  -o                    Do installation only, does not start up ayfie"    
   echo "  -p <port>             Default: $base_port + version number"
-  echo "  -r                    Stop and remove ayfie (for default install dir only)"  
+  echo "  -q <user>:<password>  User and password to Quay Docker image storage"  
+  echo "  -r                    Stop and remove ayfie (for default install dir only)"   
   echo "  -s                    Stop ayfie (for default install directory only)" 
-  echo "  -v <version>          Mandatory: 1.8.3, 1.9.0, 1.10.3, etc." 
+  echo "  -v <version>          Mandatory: 1.13.7, 1.13.9, 1.14.0 etc." 
   echo  
   exit 1
 }
 
 validate_and_process_input_parameters() {
+    if [[ $quay ]]; then
+      user_pwd=(${quay//:/ })
+      if [[ ${#user_pwd[@]} == 2 ]]; then      
+        quay_user=${user_pwd[0]}
+        quay_password=${user_pwd[1]}
+      else
+        show_usage_and_exit "Quay user and password not in requested format"
+      fi
+    fi
     if [[ ! $ayfie_version ]]; then
-      show_usage_and_exit "The '-v <version>' option is mandatory"
+      show_usage_and_exit "The -v '<version>' option is mandatory"
     fi
     if [[ ! $ayfie_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         show_usage_and_exit "The version format has to be x.y.z (e.g 1.10.3)"
@@ -127,7 +140,17 @@ validate_and_process_input_parameters() {
         echo "  Alerting:             To be included"
       else
         echo "  Alerting:             Not to be included"      
-      fi            
+      fi
+      if [[ $quay_user ]]; then
+        echo "  Quay user:            $quay_user"
+      else
+        echo "  Quay user:            None given"  
+      fi
+      if [[ $quay_password ]]; then
+        echo "  Quay password:        *******"
+      else
+        echo "  Quay password:        None given"  
+      fi                        
       echo
       echo "Do you want to go ahead with the ayfie Inspector installation (y/n)?"
     fi
@@ -186,7 +209,7 @@ download_installer_zip_file() {
   fi
 }
 
-unzip_installer_zip_file() {
+unzip_installer_file() {
   if ! type "unzip" > /dev/null; then
     apt-get update
     apt-get install unzip
@@ -201,38 +224,60 @@ unzip_installer_zip_file() {
 install_ayfie() {
   mkdir $install_dir_path
   download_installer_zip_file
-  unzip_installer_zip_file
+  unzip_installer_file
   gen_or_copy_dot_env_file
   update_docker_compose_yml_file
 }
 
-checkDocker() {
-  dockerVersion=$(docker version --format '{{.Server.Version}}')
-  exitStatus=$?
-  if [ ${exitStatus} -ne 0 ]; then
+install_docker() {
+  if ! type "docker" > /dev/null; then
+    apt-get install -y apt-transport-https ca-certificates curl software-properties-common
     apt-get update
-    apt-get install docker.io
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+    apt-key fingerprint 0EBFCD88
+    apt-get update
+    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    apt-get update
+    apt-get install docker-ce
   fi
-  parsedVersion=( ${dockerVersion//./ })
-  if (( parsedVersion[0] < 17 )); then
-    echo "Need at least version 17 of docker"
-    exit 1
+}
+
+addUserToDockerGroup() {
+  if [ $(getent group docker) ]; then
+    true  
+  else
+    groupadd docker
   fi
+  usermod -aG docker $USER
+}
+
+loginToQuay() {
+  if [[ $quay_user ]] && [[ $quay_password ]]; then
+    docker login --username=$quay_user --password=$quay_password "quay.io"
+  fi
+}
+
+update_sysctl() {
+    grep -q -F 'vm.max_map_count=262144' /etc/sysctl.conf || echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
+    grep -q -F 'vm.swappiness=1' /etc/sysctl.conf || echo 'vm.swappiness=1' >> /etc/sysctl.conf
+    sysctl -p
 }
 
 start_ayfie() {
   if [[ $block_execution == false ]]; then 
     pushd $PWD
     cd $install_dir_path
-    checkDocker
-    if [ ! -x docker-compose ]; then
-      curl -L https://github.com/docker/compose/releases/download/1.17.0/docker-compose-`uname -s`-`uname -m` -o docker-compose
-      chmod a+x docker-compose
+    install_docker
+    addUserToDockerGroup
+    loginToQuay
+    if ! type "docker-compose" > /dev/null; then
+      curl -L https://github.com/docker/compose/releases/download/1.21.2/docker-compose-$(uname -s)-$(uname -m) -o docker-compose
+      chmod +x docker-compose
     fi
     if [[ $alerting == true ]]; then
-      docker-compose -f docker-compose.yml -f docker-compose-alerting.yml up -d
+      ./docker-compose -f docker-compose.yml -f docker-compose-alerting.yml up -d
     else
-      docker-compose -f docker-compose.yml up -d
+      ./docker-compose -f docker-compose.yml up -d
     fi
     popd
   fi
@@ -241,11 +286,11 @@ start_ayfie() {
 stop_ayfie() {
   pushd $PWD
   cd $install_dir_path
-  docker-compose -f docker-compose.yml -f docker-compose-alerting.yml down
+  ./docker-compose -f docker-compose.yml -f docker-compose-alerting.yml down
   popd
 }
 
-while getopts "abc:d:e:hi:m:op:rsv:" option; do
+while getopts "abc:d:e:hi:m:op:q:rsv:" option; do
   case $option in
     a)
       alerting=true ;;
@@ -267,6 +312,8 @@ while getopts "abc:d:e:hi:m:op:rsv:" option; do
       block_execution=true ;;    
     p)
       port=$OPTARG ;;
+    q)
+      quay=$OPTARG ;;
     r) 
       stop=true; remove=true ;;
     s)
@@ -279,6 +326,9 @@ while getopts "abc:d:e:hi:m:op:rsv:" option; do
 done
 
 main() {
+  if [[ "$EUID" -ne 0 ]] ; then 
+    show_usage_and_exit "The script has to be run as root (sudo)"
+  fi
   validate_and_process_input_parameters
   if [[ $remove == true || $stop == true || $bounce == true ]]; then
     stop_ayfie
@@ -290,8 +340,10 @@ main() {
     fi
   else
     install_ayfie
+    update_sysctl
     start_ayfie
   fi
 }
 
 main
+
