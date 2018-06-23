@@ -160,6 +160,43 @@ validate_and_process_input_parameters() {
     fi
 }
 
+get_file_deployment_type() {
+  if [[ -x "$@" ]]; then
+    echo "SCRIPT"
+  else
+    command -v "$@" >/dev/null 2>&1
+    if [[ $? -eq 0 ]]; then
+      echo "COMMAND"
+    elif [[ -e "$@" ]]; then
+      echo "FILE"
+    else
+      echo "NONE"
+    fi
+  fi
+}
+
+is_already_installed() {
+  file_deployment_type=$(get_file_deployment_type "$@")
+  if [[ $file_deployment_type == "SCRIPT" ]] || [[ $file_deployment_type == "COMMAND" ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+has_to_be_sourced() {
+  file_deployment_type=$(get_file_deployment_type "$@")
+  if [[ $file_deployment_type == "SCRIPT" ]]; then
+    return 0
+  else
+    if [[ $file_deployment_type == "COMMAND" ]]; then
+      return 1
+    else
+      show_usage_and_exit "no '$@' available to be run"
+    fi
+  fi
+}
+
 gen_or_copy_dot_env_file() {
   if [[ $dot_env_file_from_path ]]; then
     cp $dot_env_file_from_path $dot_env_file_to_path
@@ -197,40 +234,49 @@ update_docker_compose_yml_file() {
 }
 
 download_installer_zip_file() {
-  dummy=$(curl -s $download_url --output $ayfie_installer_file_path)
-  status=$?
-  if [[ $status -ne 0 ]]; then
-    show_usage_and_exit "cURL failed with error code $status, check\nhttps://curl.haxx.se/libcurl/c/libcurl-errors.html"
+  $(curl -s $download_url --output $ayfie_installer_file_path)
+  if [[ $? -ne 0 ]]; then
+    return 1
   fi
   token="404 Not Found"
   output=$(cat $ayfie_installer_file_path | grep "$token")
   if [[ $output =~ $token ]]; then
-    show_usage_and_exit "Downloading failed with '$token', check if correct ayfie version number"
+    return 2
   fi
+  return 0
 }
 
 unzip_installer_file() {
-  if ! type "unzip" > /dev/null; then
+  if ! is_already_installed "unzip"; then
     apt-get update
     apt-get install unzip
   fi
   eval "unzip $ayfie_installer_file_path -d $install_dir_path"
-  status=$?
-  if [[ $status -ne 0 ]]; then
-    show_usage_and_exit "Unzip operation failed with error code $status"
+  if [[ $? -ne 0 ]]; then
+    show_usage_and_exit "Unzip operation failed for file '$ayfie_installer_file_path'"
   fi
 }
 
 install_ayfie() {
   mkdir $install_dir_path
   download_installer_zip_file
+  zip_download_error_code=$?
+  if [[ $zip_download_error_code -ne 0 ]]; then
+    rm -r $install_dir_path
+  fi
+  if [[ $zip_download_error_code -eq 1 ]]; then
+    show_usage_and_exit "cURL failed for url '$download_url'"
+  fi
+  if [[ $zip_download_error_code -eq 2 ]]; then
+    show_usage_and_exit "A 404 download error, is $ayfie_version a valid version number?"
+  fi
   unzip_installer_file
   gen_or_copy_dot_env_file
   update_docker_compose_yml_file
 }
 
 install_docker() {
-  if ! type "docker" > /dev/null; then
+  if ! is_already_installed "docker"; then
     apt-get install -y apt-transport-https ca-certificates curl software-properties-common
     apt-get update
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
@@ -242,7 +288,17 @@ install_docker() {
   fi
 }
 
-addUserToDockerGroup() {
+install_docker_compose() {
+  pushd $PWD
+  cd $install_dir_path
+  if ! is_already_installed "docker-compose"; then 
+    curl -L https://github.com/docker/compose/releases/download/1.21.2/docker-compose-$(uname -s)-$(uname -m) -o docker-compose
+    chmod +x docker-compose
+  fi
+  popd
+}
+
+add_user_to_docker_group() {
   if [ $(getent group docker) ]; then
     true  
   else
@@ -251,7 +307,7 @@ addUserToDockerGroup() {
   usermod -aG docker $USER
 }
 
-loginToQuay() {
+login_to_quay() {
   if [[ $quay_user ]] && [[ $quay_password ]]; then
     docker login --username=$quay_user --password=$quay_password "quay.io"
   fi
@@ -263,21 +319,26 @@ update_sysctl() {
     sysctl -p
 }
 
+do_ayfie_prerequisites() {
+  install_docker
+  add_user_to_docker_group
+  login_to_quay
+  install_docker_compose
+  update_sysctl
+}
+
 start_ayfie() {
   if [[ $block_execution == false ]]; then 
     pushd $PWD
     cd $install_dir_path
-    install_docker
-    addUserToDockerGroup
-    loginToQuay
-    if ! type "docker-compose" > /dev/null; then
-      curl -L https://github.com/docker/compose/releases/download/1.21.2/docker-compose-$(uname -s)-$(uname -m) -o docker-compose
-      chmod +x docker-compose
+    docker_compose="docker-compose"
+    if has_to_be_sourced $docker_compose; then
+        docker_compose="./$docker_compose"
     fi
     if [[ $alerting == true ]]; then
-      ./docker-compose -f docker-compose.yml -f docker-compose-alerting.yml up -d
+      eval "$docker_compose -f docker-compose.yml -f docker-compose-alerting.yml up -d"
     else
-      ./docker-compose -f docker-compose.yml up -d
+      eval "$docker_compose -f docker-compose.yml up -d"
     fi
     popd
   fi
@@ -286,7 +347,14 @@ start_ayfie() {
 stop_ayfie() {
   pushd $PWD
   cd $install_dir_path
-  ./docker-compose -f docker-compose.yml -f docker-compose-alerting.yml down
+  if [[ $? -ne 0 ]]; then
+    show_usage_and_exit "Failed to change to directory '$install_dir_path'"
+  fi
+  docker_compose="docker-compose"
+  if has_to_be_sourced "docker-compose"; then
+    docker_compose="./docker_compose"
+  fi
+  eval "$docker_compose -f docker-compose.yml -f docker-compose-alerting.yml down"
   popd
 }
 
@@ -340,7 +408,7 @@ main() {
     fi
   else
     install_ayfie
-    update_sysctl
+    do_ayfie_prerequisites
     start_ayfie
   fi
 }
