@@ -57,6 +57,15 @@ validate_and_process_input_parameters() {
         show_usage_and_exit "Quay user and password not in requested format"
       fi
     fi
+    logged_into_quay=false
+    if is_logged_into_quay; then
+      logged_into_quay=true   
+    fi
+    if [[ ! $quay_user ]] || [[ ! $quay_password ]]; then
+      if [[ $logged_into_quay == false ]]; then
+        show_usage_and_exit "Either first log into quay or use option -q user:password"
+      fi
+    fi
     if [[ ! $ayfie_version ]]; then
       show_usage_and_exit "The -v '<version>' option is mandatory"
     fi
@@ -141,10 +150,14 @@ validate_and_process_input_parameters() {
       else
         echo "  Alerting:             Not to be included"      
       fi
+      quay_login_info=""
+      if [[ $logged_into_quay == true ]]; then
+        quay_login_info="(some quay user already logged in)"
+      fi
       if [[ $quay_user ]]; then
-        echo "  Quay user:            $quay_user"
+        echo "  Quay user:            $quay_user $quay_login_info" 
       else
-        echo "  Quay user:            None given"  
+        echo "  Quay user:            None given $quay_login_info"
       fi
       if [[ $quay_password ]]; then
         echo "  Quay password:        *******"
@@ -307,7 +320,16 @@ add_user_to_docker_group() {
   usermod -aG docker $USER
 }
 
-login_to_quay() {
+is_logged_into_quay() {
+  if grep -Fq quay.io ~/.docker/config.json
+  then
+     return 0
+  else
+    return 1
+  fi
+}
+
+log_into_quay() {
   if [[ $quay_user ]] && [[ $quay_password ]]; then
     docker login --username=$quay_user --password=$quay_password "quay.io"
   fi
@@ -322,7 +344,7 @@ update_sysctl() {
 do_ayfie_prerequisites() {
   install_docker
   add_user_to_docker_group
-  login_to_quay
+  log into_quay
   install_docker_compose
   update_sysctl
 }
