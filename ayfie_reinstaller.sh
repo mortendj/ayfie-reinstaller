@@ -5,19 +5,23 @@ data_dir=
 version=
 port_offset=
 dot_env_file_from_path=
-docker_compose_custom_yml_file_path=
+application_custom_yml_file_path=
+groovy_script_path=
 install_dir_path=
 ram=
 quay=
 quay_user=
 quay_password=
-block_execution=false
+install_dir_name_prefix=
+port_base_number=
 base_port=20000
+block_execution=false
 base_url="http://docs.ayfie.com/ayfie-platform/release/"
 stop=false
 remove=false
 bounce=false
 alerting=false
+frontend=false
 
 show_usage_and_exit() {
   local error_msg=$1
@@ -34,11 +38,15 @@ show_usage_and_exit() {
   echo "  -c <file path>        Path to application-custom.yml. Default: No path"  
   echo "  -d <data dir>         Default: <install dir>/data"
   echo "  -e <file path>        The .env file location. Default: file auto generated"
+  echo "  -f                    Install front end / search page"  
+#  echo "  -g <file path>        Groovy ingestion script file location. Default: No path" 
   echo "  -h                    This help"
   echo "  -i <install dir>      Default: ./<version number>"  
-  echo "  -m <GB of RAM>        Default: 64"  
+  echo "  -m <GB of RAM>        Default: 64" 
+  echo "  -n <name>             Name to prefix the install directory name" 
+  echo "  -N <number>           Base for version derived port number, Default 20000"  
   echo "  -o                    Do installation only, does not start up ayfie"    
-  echo "  -p <port>             Default: $base_port + version number"
+  echo "  -p <port>             Default: base port nunber (-N) + version number (-v)"
   echo "  -q <user>:<password>  User and password to Quay Docker image storage"  
   echo "  -r                    Stop and remove ayfie (for default install dir only)"   
   echo "  -s                    Stop ayfie (for default install directory only)" 
@@ -66,6 +74,12 @@ validate_and_process_input_parameters() {
         show_usage_and_exit "Either first log into quay or use option -q user:password"
       fi
     fi
+    if [[ $port_base_number ]]; then
+      if [[ ! $port_base_number =~ ^[0-6]0000+$ ]]; then
+        show_usage_and_exit "The base port number has to be '[0-6]0000' "
+      fi
+      base_port=$port_base_number
+    fi
     if [[ ! $ayfie_version ]]; then
       show_usage_and_exit "The -v '<version>' option is mandatory"
     fi
@@ -73,11 +87,14 @@ validate_and_process_input_parameters() {
         show_usage_and_exit "The version format has to be x.y.z (e.g 1.10.3)"
     fi
     if [[ $install_dir_path ]]; then
+      if [[ $install_dir_name_prefix ]]; then
+        show_usage_and_exit "Name prefix (-n) does not work with install path (-i)"
+      fi
       if [[ ! "${install_dir_path:0:1}" = "/" ]]; then
         show_usage_and_exit "The install path must be an absolute path"
       fi
     else
-      install_dir_path="$PWD/$ayfie_version"  
+      install_dir_path="$PWD/$install_dir_name_prefix$ayfie_version"  
     fi
     if [[ -d "$install_dir_path" ]]; then
       if [[ ! ( $stop == true || $remove == true || $bounce == true) ]]; then
@@ -85,7 +102,7 @@ validate_and_process_input_parameters() {
       fi
     fi
     if [[ ! $data_dir ]]; then
-      data_dir="./data"
+      data_dir="$install_dir_path/data"
     fi
     if [[ $dot_env_file_from_path ]]; then
       if [[ ! -f $dot_env_file_from_path ]]; then
@@ -111,6 +128,13 @@ validate_and_process_input_parameters() {
         show_usage_and_exit "The port number has to be an integer"
       fi
     fi
+    if [[ $remove == true ]] || [[ $stop == true ]] || [[ $bounce == true ]]; then
+      if [[ -d "$install_dir_path" ]]; then
+        true
+      else
+        show_usage_and_exit "There is no directory $install_dir_path"
+      fi
+    fi
     
     ayfie_installer_file_name="ayfie-installer-v$ayfie_version.zip"
     ayfie_installer_file_path=$(readlink -m "$install_dir_path/$ayfie_installer_file_name")
@@ -121,6 +145,7 @@ validate_and_process_input_parameters() {
     
     echo
     echo "  Version:              $ayfie_version"
+    echo "  Install dir:          $install_dir_path"
     if [[ $remove == true ]]; then
       echo
       echo "Do you want to go ahead with removing installation (y/n)?"
@@ -132,18 +157,32 @@ validate_and_process_input_parameters() {
       echo "Do you want to go ahead with restarting the ayfie Inspector (y/n)?"
     else
       echo "  Port:                 $port"
-      echo "  Install dir:          $install_dir_path"
       echo "  Data dir:             $data_dir"
       if [[ $dot_env_file_from_path ]]; then
         echo "  .env file:            $dot_env_file_from_path"
       else
         echo "  Total RAM:            $ram" 
-        echo "  .env file:            To be generated"    
+        echo "  .env file:            Will be generated"    
       fi
-      if [[ $docker_compose_custom_yml_file_path ]]; then
-        echo "  docker-compose.yml:   To be updated"
+      if [[ $application_custom_yml_file_path ]]; then
+        echo "  application.yml:      $application_custom_yml_file_path"
+      else
+        echo "  application.yml:      No custom file"      
+      fi 
+#      if [[ $groovy_script_path ]]; then
+#        echo "  Groovy script:        $groovy_script_path"
+#      else
+#        echo "  Groovy script:        No script"      
+#      fi        
+      if [[ $application_custom_yml_file_path ]] || [[ $groovy_script_path ]]; then
+        echo "  docker-compose.yml:   Will be updated"
       else
         echo "  docker-compose.yml:   Unchanged"      
+      fi
+      if [[ $frontend == true ]]; then
+        echo "  Frontend:             To be included"
+      else
+        echo "  Frontend:             Not to be included"      
       fi
       if [[ $alerting == true ]]; then
         echo "  Alerting:             To be included"
@@ -197,19 +236,6 @@ is_already_installed() {
   fi
 }
 
-has_to_be_sourced() {
-  file_deployment_type=$(get_file_deployment_type "$@")
-  if [[ $file_deployment_type == "SCRIPT" ]]; then
-    return 0
-  else
-    if [[ $file_deployment_type == "COMMAND" ]]; then
-      return 1
-    else
-      show_usage_and_exit "no '$@' available to be run"
-    fi
-  fi
-}
-
 gen_or_copy_dot_env_file() {
   if [[ $dot_env_file_from_path ]]; then
     cp $dot_env_file_from_path $dot_env_file_to_path
@@ -232,16 +258,42 @@ gen_or_copy_dot_env_file() {
   fi
 }
 
+gen_application_custom_yml_file() {
+    script_name="$@"
+    local lines="ingestion:"
+    lines="$lines\n  pipeline:"
+    lines="$lines\n   preScriptTransformer:"
+    lines="$lines\n      skip: false"
+    lines="$lines\n      scriptPath: \"/home/dev/restapp/${script_name}\""
+    printf $lines > $dot_env_file_to_path
+}
+
+add_mapping_to_docker_compose_yml_file() {
+  cp "$@" $install_dir_path
+  org_file="$install_dir_path/$(basename $@)"
+  f=$docker_compose_yml_file_path
+  f_copy="$f.copy"
+  cp $f $f_copy
+  python -c "open(\"$f\",\"w\").write(open(\"$f_copy\",\"r\").read().replace(\"  elasticsearch:\", \"    - ${org_file}:/home/dev/restapp/$@\n  elasticsearch:\"))"
+  rm $f_copy
+}
+
 update_docker_compose_yml_file() {
-  if [[ $docker_compose_custom_yml_file_path ]]; then
+  if [[ $application_custom_yml_file_path ]]; then
     if ! grep -q application-custom.yml "$docker_compose_yml_file_path"; then
-      cp $docker_compose_custom_yml_file_path $install_dir_path
-      custom="$install_dir_path/$(basename $docker_compose_custom_yml_file_path)"
-      f=$docker_compose_yml_file_path
-      f_copy="$f.copy"
-      cp $f $f_copy
-      python -c "open(\"$f\",\"w\").write(open(\"$f_copy\",\"r\").read().replace(\"  elasticsearch:\", \"    - ${custom}:/home/dev/restapp/application-custom.yml\n  elasticsearch:\"))"
-      rm $f_copy
+      add_mapping_to_docker_compose_yml_file $application_custom_yml_file_path 
+    fi
+  fi
+  if [[ $groovy_script_path ]]; then
+    if ! grep -q $groovy_script_path "$docker_compose_yml_file_path"; then
+      add_mapping_to_docker_compose_yml_file $groovy_script_path 
+    fi
+    if [[ ! $application_custom_yml_file_path ]]; then
+      application_custom_yml_file_path="$install_dir_path/application-custom.yml"
+      if ! grep -q application-custom.yml "$docker_compose_yml_file_path"; then
+        gen_application_custom_yml_file "$install_dir_path/application-custom.yml"
+        add_mapping_to_docker_compose_yml_file application-custom.yml
+      fi
     fi
   fi
 }
@@ -344,7 +396,7 @@ update_sysctl() {
 do_ayfie_prerequisites() {
   install_docker
   add_user_to_docker_group
-  log into_quay
+  log_into_quay
   install_docker_compose
   update_sysctl
 }
@@ -353,15 +405,14 @@ start_ayfie() {
   if [[ $block_execution == false ]]; then 
     pushd $PWD
     cd $install_dir_path
-    docker_compose="docker-compose"
-    if has_to_be_sourced $docker_compose; then
-        docker_compose="./$docker_compose"
+    docker_compose_start_cmd="docker-compose -f docker-compose.yml"
+    if [[ $frontend == true ]]; then
+        docker_compose_start_cmd="$docker_compose_start_cmd -f docker-compose-frontend.yml"
     fi
     if [[ $alerting == true ]]; then
-      eval "$docker_compose -f docker-compose.yml -f docker-compose-alerting.yml up -d"
-    else
-      eval "$docker_compose -f docker-compose.yml up -d"
+        docker_compose_start_cmd="$docker_compose_start_cmd -f docker-compose-alerting.yml"
     fi
+    eval "$docker_compose_start_cmd up -d"
     popd
   fi
 }
@@ -372,32 +423,36 @@ stop_ayfie() {
   if [[ $? -ne 0 ]]; then
     show_usage_and_exit "Failed to change to directory '$install_dir_path'"
   fi
-  docker_compose="docker-compose"
-  if has_to_be_sourced "docker-compose"; then
-    docker_compose="./docker_compose"
-  fi
-  eval "$docker_compose -f docker-compose.yml -f docker-compose-alerting.yml down"
+  eval "docker-compose -f docker-compose.yml -f docker-compose-frontend.yml -f docker-compose-alerting.yml down"
   popd
 }
 
-while getopts "abc:d:e:hi:m:op:q:rsv:" option; do
+while getopts "abc:d:e:fg:hi:m:n:N:op:q:rsv:" option; do
   case $option in
     a)
       alerting=true ;;
     b)
       bounce=true ;;
     c)
-      docker_compose_custom_yml_file_path=$OPTARG ;;      
+      application_custom_yml_file_path=$OPTARG ;;      
     d)
       data_dir=$OPTARG ;;
     e)
       dot_env_file_from_path=$OPTARG ;;
+    f)
+      frontend=true ;;      
+    g)
+      groovy_script_path=$OPTARG ;;  
     h)
       show_usage_and_exit ;;
     i)
       install_dir_path=$OPTARG ;;
     m)
-      ram=$OPTARG ;;      
+      ram=$OPTARG ;; 
+    n)
+      install_dir_name_prefix=$OPTARG ;; 
+    N)
+      port_base_number=$OPTARG ;;        
     o)
       block_execution=true ;;    
     p)
